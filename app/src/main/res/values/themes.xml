@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.SwasthyaSathi" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#035657</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>
