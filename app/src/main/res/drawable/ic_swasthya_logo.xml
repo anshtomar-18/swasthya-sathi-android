@@ -1,0 +1,29 @@
+﻿<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Emerald Shield Base -->
+    <path
+        android:fillColor="#047857"
+        android:pathData="M60,10 C85,10 102,19 104,44 C104,78 72,102 60,110 C48,102 16,78 16,44 C18,19 35,10 60,10 Z" />
+    
+    <!-- Inner Soft Mint Glow Shield -->
+    <path
+        android:fillColor="#059669"
+        android:pathData="M60,18 C80,18 94,25 96,46 C96,73 70,93 60,100 C50,93 24,73 24,46 C26,25 40,18 60,18 Z" />
+
+    <!-- Pure White Medical Cross / Pulse Wave Hybrid -->
+    <!-- Center Leaf / Pulse Arc -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,34 H64 V48 H78 V56 H64 V72 H56 V56 H42 V48 H56 Z" />
+
+    <!-- Sharp Bright Mint ECG Lifeline overlay -->
+    <path
+        android:strokeColor="#34D399"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M30,52 H44 L49,38 L57,66 L63,44 L68,52 H90" />
+</vector>

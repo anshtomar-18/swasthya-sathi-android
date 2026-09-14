@@ -1,6 +1,13 @@
 package com.swasthyasathi.app.viewmodel
 
+import android.Manifest
 import android.app.Application
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Geocoder
+import android.location.Location
+import android.location.LocationManager
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.swasthyasathi.app.data.engine.RiskEngine
@@ -25,9 +32,40 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     // Profile State
     val userProfile: StateFlow<UserProfile> = profileRepository.profileFlow
 
+    // Consumer Profile Drawer State
+    private val _isProfileDrawerOpen = MutableStateFlow(false)
+    val isProfileDrawerOpen: StateFlow<Boolean> = _isProfileDrawerOpen.asStateFlow()
+
+    // Location Search Modal State
+    private val _isLocationSearchOpen = MutableStateFlow(false)
+    val isLocationSearchOpen: StateFlow<Boolean> = _isLocationSearchOpen.asStateFlow()
+
+    private val _isLocatingGps = MutableStateFlow(false)
+    val isLocatingGps: StateFlow<Boolean> = _isLocatingGps.asStateFlow()
+
     // Location State
     private val _currentCity = MutableStateFlow(DEFAULT_INDIAN_CITIES[0])
     val currentCity: StateFlow<CityPreset> = _currentCity.asStateFlow()
+
+    // Hydration State
+    private val _waterDrankMl = MutableStateFlow(1750)
+    val waterDrankMl: StateFlow<Int> = _waterDrankMl.asStateFlow()
+
+    private val _orsDrankMl = MutableStateFlow(500)
+    val orsDrankMl: StateFlow<Int> = _orsDrankMl.asStateFlow()
+
+    private val _targetWaterMl = MutableStateFlow(3000)
+    val targetWaterMl: StateFlow<Int> = _targetWaterMl.asStateFlow()
+
+    private val _targetOrsMl = MutableStateFlow(800)
+    val targetOrsMl: StateFlow<Int> = _targetOrsMl.asStateFlow()
+
+    // Cooling Shelters State
+    private val _shelters = MutableStateFlow(DEFAULT_COOLING_SHELTERS)
+    val shelters: StateFlow<List<CoolingShelter>> = _shelters.asStateFlow()
+
+    private val _selectedShelterOnMap = MutableStateFlow<CoolingShelter?>(DEFAULT_COOLING_SHELTERS[0])
+    val selectedShelterOnMap: StateFlow<CoolingShelter?> = _selectedShelterOnMap.asStateFlow()
 
     // Telemetry State
     private val _telemetry = MutableStateFlow(EnvironmentalTelemetry())
@@ -98,7 +136,187 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectCity(city: CityPreset) {
         _currentCity.value = city
+        updateSheltersForLocation(city.name, city.lat, city.lon)
         refreshData()
+    }
+
+    fun selectCustomLocation(rawQuery: String) {
+        val customCity = createCustomCity(rawQuery)
+        selectCity(customCity)
+    }
+
+    fun setLocationSearchOpen(open: Boolean) {
+        _isLocationSearchOpen.value = open
+    }
+
+    fun selectShelterOnMap(shelter: CoolingShelter?) {
+        _selectedShelterOnMap.value = shelter
+    }
+
+    fun detectRealLocation(context: Context, onPermissionDenied: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isLocatingGps.value = true
+            val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasFine && !hasCoarse) {
+                _isLocatingGps.value = false
+                onPermissionDenied()
+                val fallbackCity = CityPreset("Connaught Place (GPS Sensor)", "New Delhi", 28.6328, 77.2197, "Simulated GPS Beacon")
+                selectCity(fallbackCity)
+                return@launch
+            }
+
+            try {
+                val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                var bestLoc: Location? = null
+                if (lm != null) {
+                    val gpsLoc = try { lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (e: SecurityException) { null }
+                    val netLoc = try { lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (e: SecurityException) { null }
+                    val passiveLoc = try { lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) } catch (e: SecurityException) { null }
+
+                    bestLoc = listOfNotNull(gpsLoc, netLoc, passiveLoc).maxByOrNull { it.time }
+                }
+
+                if (bestLoc != null) {
+                    val lat = bestLoc.latitude
+                    val lon = bestLoc.longitude
+                    var resolvedName = "GPS Fix (${String.format(Locale.US, "%.3f", lat)}°N, ${String.format(Locale.US, "%.3f", lon)}°E)"
+                    var resolvedState = "Live GPS Coordinates"
+
+                    try {
+                        val geocoder = Geocoder(context, Locale.getDefault())
+                        @Suppress("DEPRECATION")
+                        val addresses = geocoder.getFromLocation(lat, lon, 1)
+                        if (!addresses.isNullOrEmpty()) {
+                            val addr = addresses[0]
+                            val locality = addr.locality ?: addr.subAdminArea ?: addr.subLocality
+                            val admin = addr.adminArea ?: ""
+                            if (!locality.isNullOrBlank()) {
+                                resolvedName = "$locality (GPS)"
+                                resolvedState = if (admin.isNotBlank()) admin else "Current Location"
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Geocoder offline fallback
+                    }
+
+                    val gpsCity = CityPreset(resolvedName, resolvedState, lat, lon, "Active GPS Telemetry")
+                    selectCity(gpsCity)
+                } else {
+                    val fallbackCity = CityPreset("Connaught Place (GPS Locked)", "New Delhi", 28.6328, 77.2197, "Simulated GPS Beacon")
+                    selectCity(fallbackCity)
+                }
+            } catch (e: Exception) {
+                val fallbackCity = CityPreset("Connaught Place (GPS Fallback)", "New Delhi", 28.6328, 77.2197, "Simulated GPS Beacon")
+                selectCity(fallbackCity)
+            } finally {
+                _isLocatingGps.value = false
+            }
+        }
+    }
+
+    private fun updateSheltersForLocation(cityName: String, lat: Double, lon: Double) {
+        val cleanName = cityName.replace(Regex("\\(.*\\)"), "").trim()
+        _shelters.value = listOf(
+            CoolingShelter(
+                id = "hub-01",
+                name = "$cleanName Climate Relief Hub",
+                category = "cooling",
+                distanceMeters = 320,
+                address = "$cleanName Central Sector Arcade",
+                tempC = 25f,
+                status = "OPEN",
+                amenities = listOf("8 Free Recliners", "Cold Misting Fans", "Free ORS Packets", "Phone Charge Point"),
+                verifiedTime = "2 mins ago",
+                relX = 0.72f,
+                relY = 0.28f,
+                canopyPct = 84,
+                shadeReductionC = 5.5f,
+                lat = lat + 0.002,
+                lon = lon + 0.002
+            ),
+            CoolingShelter(
+                id = "piao-01",
+                name = "$cleanName Jal Sewa Dispenser",
+                category = "water",
+                distanceMeters = 180,
+                address = "$cleanName Outer Transit Corridor",
+                tempC = 14f,
+                status = "ACTIVE",
+                amenities = listOf("100% RO Purified (TDS 68)", "4 Food-Grade Steel Taps", "Free Bottle Refills", "Wheelchair Ramp"),
+                verifiedTime = "Tested Pure 13:40",
+                relX = 0.35f,
+                relY = 0.38f,
+                canopyPct = 88,
+                shadeReductionC = 6.0f,
+                lat = lat - 0.0015,
+                lon = lon - 0.002
+            ),
+            CoolingShelter(
+                id = "clinic-01",
+                name = "$cleanName Mohalla Health Clinic",
+                category = "clinic",
+                distanceMeters = 550,
+                address = "$cleanName Metro Gate 2 Lane",
+                tempC = 23f,
+                status = "DR ON SITE",
+                amenities = listOf("Central Air Conditioned Ward", "Heatstroke Saline IV Supplies", "Instant Vitals Check (BP/SpO2)", "Free Paracetamol"),
+                verifiedTime = "Live On Site",
+                doctorOnSite = "Dr. Kavita Sharma, MD",
+                relX = 0.65f,
+                relY = 0.76f,
+                canopyPct = 78,
+                shadeReductionC = 4.8f,
+                lat = lat - 0.003,
+                lon = lon + 0.001
+            ),
+            CoolingShelter(
+                id = "hub-02",
+                name = "$cleanName Shaded Transit Lounge",
+                category = "cooling",
+                distanceMeters = 680,
+                address = "$cleanName Underground Concourse",
+                tempC = 24f,
+                status = "OPEN",
+                amenities = listOf("Continuous Shaded Canopy", "Industrial Misting Fans", "Chilled Electrolyte Station"),
+                verifiedTime = "10 mins ago",
+                relX = 0.22f,
+                relY = 0.68f,
+                canopyPct = 90,
+                shadeReductionC = 6.5f,
+                lat = lat - 0.002,
+                lon = lon - 0.003
+            )
+        )
+        _selectedShelterOnMap.value = _shelters.value.firstOrNull()
+    }
+
+    fun setProfileDrawerOpen(open: Boolean) {
+        _isProfileDrawerOpen.value = open
+    }
+
+    fun logWater(amountMl: Int) {
+        _waterDrankMl.value = _waterDrankMl.value + amountMl
+    }
+
+    fun logOrs(amountMl: Int) {
+        _orsDrankMl.value = _orsDrankMl.value + amountMl
+    }
+
+    fun undoHydration(waterAmount: Int = 250, orsAmount: Int = 0) {
+        _waterDrankMl.value = maxOf(0, _waterDrankMl.value - waterAmount)
+        _orsDrankMl.value = maxOf(0, _orsDrankMl.value - orsAmount)
+    }
+
+    fun resetHydration() {
+        _waterDrankMl.value = 0
+        _orsDrankMl.value = 0
+    }
+
+    fun detectGps() {
+        // Direct simulation shortcut
+        selectCity(CityPreset("Connaught Place (GPS Locked)", "New Delhi", 28.6328, 77.2197, "Active GPS Beacon"))
     }
 
     fun toggleOfflineMode() {

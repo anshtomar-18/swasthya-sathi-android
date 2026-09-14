@@ -22,7 +22,9 @@ object RiskEngine {
         aqi: Double,
         profile: UserProfile
     ): RiskEngineResult {
-        val hasSensitivity = { type: String -> profile.sensitivities.contains(type) }
+        val hasSensitivity = { type: String ->
+            profile.sensitivities.contains(type) || profile.diseases.any { it.contains(type, ignoreCase = true) }
+        }
 
         // 1. Thermal Stress Sub-Score (1.0 to 4.0) - IMD / NOAA Heat Index
         val effectiveTemp = max(temperatureC, feelsLikeC)
@@ -47,38 +49,47 @@ object RiskEngine {
             baseScore += 0.5
         }
 
-        // 3. Exposure Modifier (0.8 to 1.25)
-        val exposureMultiplier = when (profile.outdoorActivityLevel.lowercase()) {
-            "high" -> 1.25
+        // 3. Exposure Modifier (0.8 to 1.35) factoring outdoor hours
+        val baseExposure = when (profile.outdoorActivityLevel.lowercase()) {
+            "high" -> 1.2
             "moderate" -> 1.0
             else -> 0.8
         }
+        val hoursBonus = when {
+            profile.outdoorHours >= 8.0f -> 0.15
+            profile.outdoorHours >= 5.0f -> 0.08
+            profile.outdoorHours <= 2.0f -> -0.05
+            else -> 0.0
+        }
+        val exposureMultiplier = (baseExposure + hoursBonus).coerceIn(0.75, 1.35)
 
-        // 4. Biological Vulnerability Escalation (0.0 to 2.0)
+        // 4. Biological Vulnerability Escalation (0.0 to 2.5)
         var vulnerabilityEscalation = 0.0
 
-        when (profile.ageGroup) {
-            "60+" -> {
-                if (thermalStress >= 2.0 || particulateStrain >= 2.0) vulnerabilityEscalation += 0.75
-            }
-            "under18" -> {
-                if (thermalStress >= 2.5) vulnerabilityEscalation += 0.4
-            }
-            "41-60" -> {
-                if (thermalStress >= 3.0 || particulateStrain >= 3.0) vulnerabilityEscalation += 0.3
-            }
+        // Age factor (from bracket or exact age)
+        if (profile.exactAge >= 60 || profile.ageGroup == "60+") {
+            if (thermalStress >= 2.0 || particulateStrain >= 2.0) vulnerabilityEscalation += 0.75
+        } else if (profile.exactAge < 16 || profile.ageGroup == "under18") {
+            if (thermalStress >= 2.5) vulnerabilityEscalation += 0.4
+        } else if (profile.exactAge in 45..59 || profile.ageGroup == "41-60") {
+            if (thermalStress >= 3.0 || particulateStrain >= 3.0) vulnerabilityEscalation += 0.3
         }
 
-        if (hasSensitivity("heat") && thermalStress >= 2.0) {
+        // Clinical conditions and sensitivities
+        if ((hasSensitivity("heat") || profile.diseases.any { it.contains("Heat", ignoreCase = true) }) && thermalStress >= 2.0) {
             vulnerabilityEscalation += 0.75
         }
 
-        if (hasSensitivity("cardiovascular")) {
+        if (hasSensitivity("cardiovascular") || profile.diseases.any { it.contains("Cardiovascular", ignoreCase = true) || it.contains("Hypertension", ignoreCase = true) }) {
             if (thermalStress >= 2.5 || particulateStrain >= 2.0) vulnerabilityEscalation += 0.85
         }
 
-        if (hasSensitivity("respiratory")) {
+        if (hasSensitivity("respiratory") || profile.diseases.any { it.contains("Asthma", ignoreCase = true) || it.contains("COPD", ignoreCase = true) || it.contains("Allergies", ignoreCase = true) }) {
             if (particulateStrain >= 2.0) vulnerabilityEscalation += 0.85
+        }
+
+        if (profile.diseases.any { it.contains("Diabetes", ignoreCase = true) || it.contains("Kidney", ignoreCase = true) }) {
+            if (thermalStress >= 2.0) vulnerabilityEscalation += 0.5
         }
 
         // 5. Final Score & Tier Determination
