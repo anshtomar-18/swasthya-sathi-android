@@ -141,8 +141,7 @@ fun SosDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             TextButton(
-                                onClick = onDismiss,
-                                modifier = Modifier.bounceClick()
+                                onClick = onDismiss
                             ) {
                                 Text("Cancel", color = AppOutline)
                             }
@@ -150,8 +149,7 @@ fun SosDialog(
                             Button(
                                 onClick = { viewModel.triggerSos() },
                                 colors = ButtonDefaults.buttonColors(containerColor = SecondaryCoral),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.bounceClick()
+                                shape = RoundedCornerShape(12.dp)
                             ) {
                                 Text("Confirm & Broadcast SOS", fontWeight = FontWeight.Bold)
                             }
@@ -217,11 +215,9 @@ fun SosDialog(
 
                             Button(
                                 onClick = onDismiss,
-                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryTeal),
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .bounceClick()
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Close Distress Protocol", fontWeight = FontWeight.Bold)
                             }
