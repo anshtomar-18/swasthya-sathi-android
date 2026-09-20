@@ -10,11 +10,22 @@ import android.location.LocationManager
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.swasthyasathi.app.ai.AIRepository
+import com.swasthyasathi.app.ai.AppLanguage
+import com.swasthyasathi.app.ai.LanguageManager
+import com.swasthyasathi.app.ai.VoiceAssistant
+import com.swasthyasathi.app.ai.VoiceState
 import com.swasthyasathi.app.data.engine.RiskEngine
 import com.swasthyasathi.app.data.model.*
-import com.swasthyasathi.app.data.network.RetrofitClient
 import com.swasthyasathi.app.data.repository.ProfileRepository
 import com.swasthyasathi.app.data.repository.WeatherRepository
+import com.swasthyasathi.app.notifications.HealthAlertManager
+import com.swasthyasathi.app.sos.SOSEvent
+import com.swasthyasathi.app.sos.SOSManager
+import com.swasthyasathi.app.sos.SOSState
+import com.swasthyasathi.app.wearable.WearableConnectionStatus
+import com.swasthyasathi.app.wearable.WearableManager
+import com.swasthyasathi.app.wearable.WearableTelemetry
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +39,11 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
 
     private val profileRepository = ProfileRepository(application)
     private val weatherRepository = WeatherRepository()
+    private val aiRepository = AIRepository()
+    private val wearableManager = WearableManager(application)
+    private val sosManager = SOSManager(application)
+    private val alertManager = HealthAlertManager(application)
+    private val voiceAssistant = VoiceAssistant(application)
 
     // Profile State
     val userProfile: StateFlow<UserProfile> = profileRepository.profileFlow
@@ -67,9 +83,12 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedShelterOnMap = MutableStateFlow<CoolingShelter?>(DEFAULT_COOLING_SHELTERS[0])
     val selectedShelterOnMap: StateFlow<CoolingShelter?> = _selectedShelterOnMap.asStateFlow()
 
-    // Telemetry State
+    // Environmental Telemetry State
     private val _telemetry = MutableStateFlow(EnvironmentalTelemetry())
     val telemetry: StateFlow<EnvironmentalTelemetry> = _telemetry.asStateFlow()
+
+    // Wearable Telemetry State
+    val wearableTelemetry: StateFlow<WearableTelemetry> = wearableManager.telemetryState
 
     // Risk Engine Result State
     private val _riskResult = MutableStateFlow(RiskEngineResult())
@@ -79,9 +98,13 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     private val _disasterWarnings = MutableStateFlow<List<DisasterWarning>>(emptyList())
     val disasterWarnings: StateFlow<List<DisasterWarning>> = _disasterWarnings.asStateFlow()
 
-    // Offline / Demo Mode State
+    // Offline / Connectivity State
     private val _isOfflineMode = MutableStateFlow(false)
     val isOfflineMode: StateFlow<Boolean> = _isOfflineMode.asStateFlow()
+
+    // Demo Wearable Control Dialog State
+    private val _isDemoWearableOpen = MutableStateFlow(false)
+    val isDemoWearableOpen: StateFlow<Boolean> = _isDemoWearableOpen.asStateFlow()
 
     // Interactive 60fps Simulator State
     private val _isSimulatorActive = MutableStateFlow(false)
@@ -101,24 +124,39 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     private val _isSosOpen = MutableStateFlow(false)
     val isSosOpen: StateFlow<Boolean> = _isSosOpen.asStateFlow()
 
-    private val _sosStatus = MutableStateFlow("idle") // idle, broadcasting, sent
-    val sosStatus: StateFlow<String> = _sosStatus.asStateFlow()
+    val sosState: StateFlow<SOSState> = sosManager.sosState
+    val pendingSosCount: StateFlow<Int> = sosManager.queue.pendingSosCount
+    val isDemoSosMode: StateFlow<Boolean> = sosManager.isDemoMode
 
-    // AI Chat State
+    // AI Chat & Multilingual State
     private val _isChatOpen = MutableStateFlow(false)
     val isChatOpen: StateFlow<Boolean> = _isChatOpen.asStateFlow()
+
+    val selectedLanguage: StateFlow<AppLanguage> = LanguageManager.currentLanguage
+    private val _isVoiceRepliesEnabled = MutableStateFlow(false)
+    val isVoiceRepliesEnabled: StateFlow<Boolean> = _isVoiceRepliesEnabled.asStateFlow()
+
+    val voiceState: StateFlow<VoiceState> = voiceAssistant.voiceState
+    val recognizedText: StateFlow<String> = voiceAssistant.recognizedText
 
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(
         listOf(
             ChatMessage(
                 sender = MessageSender.USER,
-                text = "I've been feeling a dull tension headache and dry throat since stepping outdoors.",
+                text = "I've been feeling dizziness and a dry throat since stepping outdoors into peak solar heat.",
                 timestamp = "1:15 PM"
             ),
             ChatMessage(
                 sender = MessageSender.AI,
-                text = "Assessing local microclimate: Barometric pressure drop combined with high ambient thermal index and PM2.5 causes cranial vasodilation and mucosal dryness. Immediate action: Drink 400 mL electrolyte fluid and rest in a shaded or indoor filtered room.",
-                timestamp = "1:16 PM"
+                text = "Clinical Assessment: Ambient thermal index (39°C feels-like) combined with elevated heart rate (118 BPM) indicates acute heat strain. Immediate action: Ingest 400 mL electrolyte fluid and rest in shade.",
+                timestamp = "1:16 PM",
+                sources = listOf(
+                    mapOf(
+                        "title" to "IMD Thermal Index & Occupational Heat Guidelines",
+                        "year" to "2024",
+                        "source" to "SwasthyaSathi RAG Knowledge Base"
+                    )
+                )
             )
         )
     )
@@ -128,10 +166,34 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
         // Collect profile changes and re-evaluate risk
         viewModelScope.launch {
             userProfile.collect { profile ->
-                recomputeRisk(profile, _telemetry.value)
+                recomputeRisk(profile, _telemetry.value, wearableTelemetry.value)
+            }
+        }
+        // Collect wearable changes and re-evaluate risk + trigger proactive alerts
+        viewModelScope.launch {
+            wearableTelemetry.collect { wearable ->
+                recomputeRisk(userProfile.value, _telemetry.value, wearable)
+                checkProactiveWearableAlerts(wearable)
             }
         }
         refreshData()
+    }
+
+    private fun checkProactiveWearableAlerts(wearable: WearableTelemetry) {
+        if (wearable.fallDetected) {
+            alertManager.sendProactiveHealthAlert(
+                title = "🚨 FALL DETECTED ALERT!",
+                message = "Your wearable watch registered an abrupt fall impact. Emergency SOS signal queued.",
+                isEmergency = true
+            )
+            triggerEmergencySOS("Automated Fall Detection Alarm")
+        } else if (wearable.heartRate > 120 && _telemetry.value.temperatureC >= 36) {
+            alertManager.sendProactiveHealthAlert(
+                title = "⚠ High Heat & Heart Rate Warning",
+                message = "Heart rate reached ${wearable.heartRate} BPM during ${telemetry.value.temperatureC}°C extreme heat. Seek cool shade immediately.",
+                isEmergency = false
+            )
+        }
     }
 
     fun selectCity(city: CityPreset) {
@@ -270,23 +332,6 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
                 shadeReductionC = 4.8f,
                 lat = lat - 0.003,
                 lon = lon + 0.001
-            ),
-            CoolingShelter(
-                id = "hub-02",
-                name = "$cleanName Shaded Transit Lounge",
-                category = "cooling",
-                distanceMeters = 680,
-                address = "$cleanName Underground Concourse",
-                tempC = 24f,
-                status = "OPEN",
-                amenities = listOf("Continuous Shaded Canopy", "Industrial Misting Fans", "Chilled Electrolyte Station"),
-                verifiedTime = "10 mins ago",
-                relX = 0.22f,
-                relY = 0.68f,
-                canopyPct = 90,
-                shadeReductionC = 6.5f,
-                lat = lat - 0.002,
-                lon = lon - 0.003
             )
         )
         _selectedShelterOnMap.value = _shelters.value.firstOrNull()
@@ -314,9 +359,20 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
         _orsDrankMl.value = 0
     }
 
-    fun detectGps() {
-        // Direct simulation shortcut
-        selectCity(CityPreset("Connaught Place (GPS Locked)", "New Delhi", 28.6328, 77.2197, "Active GPS Beacon"))
+    fun resetProfile() {
+        profileRepository.resetProfile()
+    }
+
+    fun setDemoWearableOpen(open: Boolean) {
+        _isDemoWearableOpen.value = open
+    }
+
+    fun updateWearableTelemetry(builder: (WearableTelemetry) -> WearableTelemetry) {
+        wearableManager.updateTelemetry(builder)
+    }
+
+    fun setLanguage(language: AppLanguage) {
+        LanguageManager.setLanguage(language)
     }
 
     fun toggleOfflineMode() {
@@ -354,7 +410,7 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
                 pm25 = (_simulatedAqi.value * 0.45f).toInt()
             )
             _telemetry.value = simulatedData
-            recomputeRisk(userProfile.value, simulatedData)
+            recomputeRisk(userProfile.value, simulatedData, wearableTelemetry.value)
         } else {
             refreshData()
         }
@@ -375,32 +431,31 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
 
             result.onSuccess { data ->
                 _telemetry.value = data
-                recomputeRisk(userProfile.value, data)
+                recomputeRisk(userProfile.value, data, wearableTelemetry.value)
+                sosManager.onConnectivityRestored()
             }
             _isLoading.value = false
         }
     }
 
-    private fun recomputeRisk(profile: UserProfile, data: EnvironmentalTelemetry) {
-        // Run deterministic calculation on-device
+    private fun recomputeRisk(profile: UserProfile, envData: EnvironmentalTelemetry, wearableData: WearableTelemetry) {
         val computed = RiskEngine.computeRisk(
-            temperatureC = data.temperatureC.toDouble(),
-            feelsLikeC = data.feelsLikeC.toDouble(),
-            humidityPct = data.humidityPct.toDouble(),
-            aqi = data.aqi.toDouble(),
+            temperatureC = envData.temperatureC.toDouble(),
+            feelsLikeC = envData.feelsLikeC.toDouble(),
+            humidityPct = envData.humidityPct.toDouble(),
+            aqi = envData.aqi.toDouble(),
             profile = profile
         )
         _riskResult.value = computed
 
-        // Run disaster warnings calculation
         val warnings = RiskEngine.computeDisasterWarnings(
-            temperatureC = data.temperatureC.toDouble(),
-            feelsLikeC = data.feelsLikeC.toDouble(),
-            humidityPct = data.humidityPct.toDouble(),
-            aqi = data.aqi.toDouble(),
-            weatherCode = data.weatherCode,
-            weatherDescription = data.weatherDescription,
-            pm25 = data.pm25.toDouble()
+            temperatureC = envData.temperatureC.toDouble(),
+            feelsLikeC = envData.feelsLikeC.toDouble(),
+            humidityPct = envData.humidityPct.toDouble(),
+            aqi = envData.aqi.toDouble(),
+            weatherCode = envData.weatherCode,
+            weatherDescription = envData.weatherDescription,
+            pm25 = envData.pm25.toDouble()
         )
         _disasterWarnings.value = warnings
     }
@@ -411,7 +466,6 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
 
     fun applyPreset(preset: DemoPreset) {
         profileRepository.saveProfile(preset.profile)
-        // Also switch to city matching preset
         val matchedCity = DEFAULT_INDIAN_CITIES.find {
             preset.profile.location.contains(it.name, ignoreCase = true)
         }
@@ -421,10 +475,6 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun resetProfile() {
-        profileRepository.resetProfile()
-    }
-
     fun setChatOpen(open: Boolean) {
         _isChatOpen.value = open
     }
@@ -432,64 +482,122 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     fun setSosOpen(open: Boolean) {
         _isSosOpen.value = open
         if (!open) {
-            _sosStatus.value = "idle"
+            sosManager.resetState()
         }
     }
 
-    fun triggerSos() {
+    fun triggerEmergencySOS(customCondition: String? = null) {
         viewModelScope.launch {
-            _sosStatus.value = "broadcasting"
-            delay(1500)
-            _sosStatus.value = "sent"
+            val city = _currentCity.value
+            val prof = userProfile.value
+            val w = wearableTelemetry.value
+            val r = riskResult.value
+
+            val event = SOSEvent(
+                userId = prof.abhaId,
+                locationName = "${city.name}, ${city.state}",
+                latitude = city.lat,
+                longitude = city.lon,
+                heartRate = w.heartRate,
+                spo2 = w.spo2,
+                bodyTemperature = w.bodyTemperature,
+                ambientTemperature = w.ambientTemperature,
+                riskLevel = r.level,
+                detectedCondition = customCondition ?: w.anomalySummary,
+                emergencyContactName = prof.emergencyContactName,
+                emergencyContactPhone = prof.emergencyContactPhone
+            )
+
+            sosManager.triggerEmergencySOS(event, _isOfflineMode.value)
         }
+    }
+
+    fun resetSosState() {
+        sosManager.resetState()
+    }
+
+    fun startVoiceRecognition() {
+        voiceAssistant.startListening(selectedLanguage.value)
+    }
+
+    fun createSpeechIntent(): android.content.Intent {
+        return voiceAssistant.createRecognizerIntent(selectedLanguage.value)
+    }
+
+    fun onSpeechActivityResult(text: String) {
+        voiceAssistant.onSpeechActivityResult(text)
+    }
+
+    fun stopVoiceRecognition() {
+        voiceAssistant.stopListening()
+    }
+
+    fun clearRecognizedText() {
+        voiceAssistant.clearRecognizedText()
+    }
+
+    fun speakResponse(text: String) {
+        if (voiceState.value == VoiceState.SPEAKING) {
+            voiceAssistant.stopSpeaking()
+        } else {
+            voiceAssistant.speak(text, selectedLanguage.value, force = true)
+        }
+    }
+
+    fun stopSpeaking() {
+        voiceAssistant.stopSpeaking()
+    }
+
+    fun toggleVoiceReplies() {
+        val nextState = !_isVoiceRepliesEnabled.value
+        _isVoiceRepliesEnabled.value = nextState
+        voiceAssistant.setVoiceRepliesEnabled(nextState)
     }
 
     fun sendChatMessage(text: String) {
         if (text.isBlank()) return
 
+        val detectedLang = LanguageManager.detectLanguageFromText(text)
+        if (detectedLang != selectedLanguage.value) {
+            LanguageManager.setLanguage(detectedLang)
+        }
+
         val now = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date())
         val userMsg = ChatMessage(sender = MessageSender.USER, text = text, timestamp = now)
         _chatMessages.value = _chatMessages.value + userMsg
 
-        // Temporary thinking placeholder
-        val thinkingMsg = ChatMessage(sender = MessageSender.AI, text = "Analyzing symptoms against microclimate...", timestamp = now)
+        val thinkingText = when (detectedLang) {
+            AppLanguage.HINDI -> "माइक्रोक्लाइमेट और स्वास्थ्य डेटा का विश्लेषण हो रहा है..."
+            AppLanguage.BENGALI -> "মাইক্রোক্লাইমেট এবং স্বাস্থ্য তথ্য বিশ্লেষণ করা হচ্ছে..."
+            else -> "Analyzing microclimate and personalized health telemetry..."
+        }
+        val thinkingMsg = ChatMessage(sender = MessageSender.AI, text = thinkingText, timestamp = now)
         _chatMessages.value = _chatMessages.value + thinkingMsg
 
         viewModelScope.launch {
-            try {
-                val response = RetrofitClient.apiService.askQuestion(AskRequest(question = text))
-                val aiReply = if (response.isSuccessful && response.body() != null) {
-                    response.body()!!.answer
-                } else {
-                    getOfflineAiReply(text)
-                }
-                replaceThinkingMsg(aiReply)
-            } catch (e: Exception) {
-                replaceThinkingMsg(getOfflineAiReply(text))
+            val response = aiRepository.askQuestion(
+                question = text,
+                language = detectedLang,
+                profile = userProfile.value,
+                envTelemetry = _telemetry.value,
+                wearableTelemetry = wearableTelemetry.value,
+                riskResult = _riskResult.value,
+                isOfflineMode = _isOfflineMode.value
+            )
+
+            replaceThinkingMsg(response.answer, response.sources)
+            if (_isVoiceRepliesEnabled.value) {
+                voiceAssistant.speak(response.answer, detectedLang)
             }
         }
     }
 
-    private fun replaceThinkingMsg(newText: String) {
+    private fun replaceThinkingMsg(newText: String, sources: List<Map<String, Any>> = emptyList()) {
         val now = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date())
         val updated = _chatMessages.value.toMutableList()
         if (updated.isNotEmpty()) {
-            updated[updated.lastIndex] = ChatMessage(sender = MessageSender.AI, text = newText, timestamp = now)
+            updated[updated.lastIndex] = ChatMessage(sender = MessageSender.AI, text = newText, timestamp = now, sources = sources)
             _chatMessages.value = updated
-        }
-    }
-
-    private fun getOfflineAiReply(prompt: String): String {
-        val lower = prompt.lowercase()
-        return when {
-            lower.contains("headache") ->
-                "**Clinical Advisory**: High ambient temperature and elevated PM2.5 cause cranial vasodilation and mucosal dryness. Ingest 400 mL electrolyte fluid and rest indoors in filtered air."
-            lower.contains("breath") || lower.contains("asthma") ->
-                "**Clinical Advisory**: Elevated AQI triggers acute bronchial reactivity. Relocate to indoor air conditioning, utilize your prescribed inhaler, and wear an N95 respirator if stepping out."
-            lower.contains("heat") || lower.contains("sweat") ->
-                "**Clinical Advisory**: High humidity halts sweat evaporation. Dosing target: 350 mL electrolyte fluid every 30 mins. Take shaded cooling pauses."
-            else ->
-                "**Clinical Assessment**: Atmospheric heat stress and particulate air pollutants place systemic strain on cardio-respiratory balance. Maintain hydration (250 mL/hr) and monitor local AQI."
         }
     }
 }

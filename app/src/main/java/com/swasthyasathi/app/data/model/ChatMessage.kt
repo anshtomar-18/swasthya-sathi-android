@@ -3,7 +3,8 @@ package com.swasthyasathi.app.data.model
 data class ChatMessage(
     val sender: MessageSender,
     val text: String,
-    val timestamp: String
+    val timestamp: String,
+    val sources: List<Map<String, Any>> = emptyList()
 )
 
 enum class MessageSender {

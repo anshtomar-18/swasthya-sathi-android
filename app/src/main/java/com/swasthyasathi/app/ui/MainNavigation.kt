@@ -26,14 +26,17 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.swasthyasathi.app.ai.FloatingAIButton
 import com.swasthyasathi.app.data.model.DEFAULT_INDIAN_CITIES
 import com.swasthyasathi.app.ui.components.ConsumerProfileDialog
+import com.swasthyasathi.app.ui.components.DemoWearableDialog
 import com.swasthyasathi.app.ui.components.LocationSearchDialog
 import com.swasthyasathi.app.ui.components.SwasthyaLogo
 import com.swasthyasathi.app.ui.components.bounceClick
 import com.swasthyasathi.app.ui.screens.*
 import com.swasthyasathi.app.ui.theme.*
 import com.swasthyasathi.app.viewmodel.HealthViewModel
+import com.swasthyasathi.app.wearable.WearableConnectionStatus
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
     object Login : Screen("login", "Login", Icons.Default.Person)
@@ -58,6 +61,9 @@ fun MainNavigation(
     val isChatOpen by viewModel.isChatOpen.collectAsState()
     val isSosOpen by viewModel.isSosOpen.collectAsState()
     val isProfileDrawerOpen by viewModel.isProfileDrawerOpen.collectAsState()
+    val isDemoWearableOpen by viewModel.isDemoWearableOpen.collectAsState()
+    val isOfflineMode by viewModel.isOfflineMode.collectAsState()
+    val wearableTelemetry by viewModel.wearableTelemetry.collectAsState()
     val currentCity by viewModel.currentCity.collectAsState()
 
     val isLocationSearchOpen by viewModel.isLocationSearchOpen.collectAsState()
@@ -157,10 +163,10 @@ fun MainNavigation(
                                             modifier = Modifier
                                                 .size(6.dp)
                                                 .clip(CircleShape)
-                                                .background(RiskLow)
+                                                .background(if (isOfflineMode) RiskHigh else RiskLow)
                                         )
                                         Text(
-                                            text = "LIVE EDGE SYNC",
+                                            text = if (isOfflineMode) "OFFLINE MESH" else "LIVE EDGE SYNC",
                                             style = MaterialTheme.typography.labelSmall.copy(
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold
@@ -171,11 +177,24 @@ fun MainNavigation(
                                 }
                             }
 
-                            // Right Actions: SOS & Consumer Profile Avatar
+                            // Right Actions: Watch Simulator, SOS & Consumer Profile Avatar
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                // Watch Sensor Button
+                                IconButton(
+                                    onClick = { viewModel.setDemoWearableOpen(true) },
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Watch,
+                                        contentDescription = "Demo Wearable Sensors",
+                                        tint = EmeraldPrimary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+
                                 Button(
                                     onClick = { viewModel.setSosOpen(true) },
                                     colors = ButtonDefaults.buttonColors(containerColor = SecondaryCoral),
@@ -188,7 +207,7 @@ fun MainNavigation(
                                     Text("SOS", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
                                 }
 
-                                // Consumer Profile Avatar Button (Top Right, 44dp Touch Target)
+                                // Consumer Profile Avatar Button
                                 Surface(
                                     modifier = Modifier
                                         .size(44.dp)
@@ -314,49 +333,67 @@ fun MainNavigation(
             }
         }
     ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Login.route,
-            modifier = Modifier.padding(innerPadding)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
         ) {
-            composable(Screen.Login.route) {
-                LoginScreen(
-                    viewModel = viewModel,
-                    onLoginSuccess = {
-                        navController.navigate(Screen.Overview.route) {
-                            popUpTo(Screen.Login.route) { inclusive = true }
+            NavHost(
+                navController = navController,
+                startDestination = Screen.Login.route,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                composable(Screen.Login.route) {
+                    LoginScreen(
+                        viewModel = viewModel,
+                        onLoginSuccess = {
+                            navController.navigate(Screen.Overview.route) {
+                                popUpTo(Screen.Login.route) { inclusive = true }
+                            }
                         }
-                    }
-                )
+                    )
+                }
+                composable(Screen.Overview.route) {
+                    OverviewScreen(
+                        viewModel = viewModel,
+                        onNavigateToShelters = { navController.navigate(Screen.Shelters.route) },
+                        onNavigateToClimate = { navController.navigate(Screen.Climate.route) },
+                        onNavigateToHydrate = { navController.navigate(Screen.Hydrate.route) },
+                        onNavigateToProfile = { viewModel.setProfileDrawerOpen(true) }
+                    )
+                }
+                composable(Screen.Climate.route) {
+                    ClimateScreen(viewModel = viewModel)
+                }
+                composable(Screen.Hydrate.route) {
+                    HydrateScreen(viewModel = viewModel)
+                }
+                composable(Screen.Shelters.route) {
+                    SheltersScreen(viewModel = viewModel)
+                }
+                composable(Screen.Triage.route) {
+                    DashboardScreen(
+                        viewModel = viewModel,
+                        onNavigateToProfile = { viewModel.setProfileDrawerOpen(true) }
+                    )
+                }
+                composable(Screen.Profile.route) {
+                    ProfileScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
             }
-            composable(Screen.Overview.route) {
-                OverviewScreen(
-                    viewModel = viewModel,
-                    onNavigateToShelters = { navController.navigate(Screen.Shelters.route) },
-                    onNavigateToClimate = { navController.navigate(Screen.Climate.route) },
-                    onNavigateToHydrate = { navController.navigate(Screen.Hydrate.route) },
-                    onNavigateToProfile = { viewModel.setProfileDrawerOpen(true) }
-                )
-            }
-            composable(Screen.Climate.route) {
-                ClimateScreen(viewModel = viewModel)
-            }
-            composable(Screen.Hydrate.route) {
-                HydrateScreen(viewModel = viewModel)
-            }
-            composable(Screen.Shelters.route) {
-                SheltersScreen(viewModel = viewModel)
-            }
-            composable(Screen.Triage.route) {
-                DashboardScreen(
-                    viewModel = viewModel,
-                    onNavigateToProfile = { viewModel.setProfileDrawerOpen(true) }
-                )
-            }
-            composable(Screen.Profile.route) {
-                ProfileScreen(
-                    viewModel = viewModel,
-                    onNavigateBack = { navController.popBackStack() }
+
+            // Floating AI Assistant Button Overlay
+            if (currentRoute != Screen.Login.route) {
+                FloatingAIButton(
+                    isOfflineMode = isOfflineMode,
+                    isWatchConnected = wearableTelemetry.connectionStatus == WearableConnectionStatus.CONNECTED,
+                    onClick = { viewModel.setChatOpen(true) },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 16.dp, end = 16.dp)
                 )
             }
         }
@@ -370,6 +407,14 @@ fun MainNavigation(
                     viewModel.setProfileDrawerOpen(false)
                     navController.navigate(Screen.Profile.route)
                 }
+            )
+        }
+
+        // Global Overlay Demo Wearable Dialog
+        if (isDemoWearableOpen) {
+            DemoWearableDialog(
+                viewModel = viewModel,
+                onDismiss = { viewModel.setDemoWearableOpen(false) }
             )
         }
 
@@ -398,3 +443,4 @@ fun MainNavigation(
         }
     }
 }
+
