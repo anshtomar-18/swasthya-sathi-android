@@ -35,6 +35,7 @@ import com.swasthyasathi.app.ui.components.DisasterCard
 import com.swasthyasathi.app.ui.components.RiskCard
 import com.swasthyasathi.app.ui.components.TelemetryCard
 import com.swasthyasathi.app.ui.components.VitalsCard
+import com.swasthyasathi.app.ui.components.WatchConnectionCard
 import com.swasthyasathi.app.ui.components.bounceClick
 import com.swasthyasathi.app.ui.theme.*
 import com.swasthyasathi.app.viewmodel.HealthViewModel
@@ -49,6 +50,7 @@ fun DashboardScreen(
     val profile by viewModel.userProfile.collectAsState()
     val city by viewModel.currentCity.collectAsState()
     val telemetry by viewModel.telemetry.collectAsState()
+    val wearableTelemetry by viewModel.wearableTelemetry.collectAsState()
     val riskResult by viewModel.riskResult.collectAsState()
     val warnings by viewModel.disasterWarnings.collectAsState()
     val isOffline by viewModel.isOfflineMode.collectAsState()
@@ -444,6 +446,9 @@ fun DashboardScreen(
                 // Headline Risk Assessment Card
                 RiskCard(result = riskResult, isOffline = isOffline)
 
+                // SwasthyaSathi Watch BLE Connection Card
+                WatchConnectionCard(viewModel = viewModel)
+
                 // Interactive Symptom Triage Selector Chips (Tap to launch AI Companion)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
@@ -518,7 +523,7 @@ fun DashboardScreen(
                 DisasterCard(warnings = warnings, locationName = city.name)
 
                 // Physiological Sensor Vitals Card (with live running ECG Canvas)
-                VitalsCard(riskLevel = riskResult.riskLevel)
+                VitalsCard(riskLevel = riskResult.riskLevel, wearableTelemetry = wearableTelemetry)
 
                 // 12-Hour Predictive Timeline
                 if (telemetry.hourly.isNotEmpty()) {

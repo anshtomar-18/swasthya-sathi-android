@@ -23,6 +23,7 @@ import com.swasthyasathi.app.notifications.HealthAlertManager
 import com.swasthyasathi.app.sos.SOSEvent
 import com.swasthyasathi.app.sos.SOSManager
 import com.swasthyasathi.app.sos.SOSState
+import com.swasthyasathi.app.wearable.WatchPacket
 import com.swasthyasathi.app.wearable.WearableConnectionStatus
 import com.swasthyasathi.app.wearable.WearableManager
 import com.swasthyasathi.app.wearable.WearableTelemetry
@@ -89,6 +90,9 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
 
     // Wearable Telemetry State
     val wearableTelemetry: StateFlow<WearableTelemetry> = wearableManager.telemetryState
+    val watchConnectionStatus: StateFlow<WearableConnectionStatus> = wearableManager.connectionStatus
+    val watchErrorMessage: StateFlow<String?> = wearableManager.lastErrorMessage
+    val isDemoWearableMode: StateFlow<Boolean> = wearableManager.isDemoMode
 
     // Risk Engine Result State
     private val _riskResult = MutableStateFlow(RiskEngineResult())
@@ -127,6 +131,7 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     val sosState: StateFlow<SOSState> = sosManager.sosState
     val pendingSosCount: StateFlow<Int> = sosManager.queue.pendingSosCount
     val isDemoSosMode: StateFlow<Boolean> = sosManager.isDemoMode
+    val lastQueuedEvent: StateFlow<SOSEvent?> = sosManager.lastQueuedEvent
 
     // AI Chat & Multilingual State
     private val _isChatOpen = MutableStateFlow(false)
@@ -176,6 +181,12 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
                 checkProactiveWearableAlerts(wearable)
             }
         }
+        // Collect real-time SOS notifications emitted by the ESP32-S3 Watch
+        viewModelScope.launch {
+            wearableManager.sosEvents.collect { sosPacket ->
+                handleWatchSosPacket(sosPacket)
+            }
+        }
         refreshData()
     }
 
@@ -193,6 +204,45 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
                 message = "Heart rate reached ${wearable.heartRate} BPM during ${telemetry.value.temperatureC}°C extreme heat. Seek cool shade immediately.",
                 isEmergency = false
             )
+        }
+    }
+
+    private fun handleWatchSosPacket(packet: WatchPacket) {
+        val prof = userProfile.value
+        val w = wearableTelemetry.value
+        val r = riskResult.value
+
+        val hasValidGps = packet.gps == true && packet.latitude != null && packet.longitude != null && packet.latitude != 0.0
+        val locationDesc = if (hasValidGps) {
+            "Watch GPS (${String.format(Locale.US, "%.4f", packet.latitude)}°N, ${String.format(Locale.US, "%.4f", packet.longitude)}°E • Satellites: ${packet.satellites ?: 0})"
+        } else {
+            "Location unavailable (Watch GPS Searching)"
+        }
+
+        val event = SOSEvent(
+            userId = prof.abhaId,
+            locationName = locationDesc,
+            latitude = if (hasValidGps) packet.latitude!! else 0.0,
+            longitude = if (hasValidGps) packet.longitude!! else 0.0,
+            heartRate = packet.hr ?: w.heartRate,
+            spo2 = packet.spo2 ?: w.spo2,
+            bodyTemperature = (packet.temperature ?: w.bodyTemperature.toDouble()).toFloat(),
+            ambientTemperature = (packet.temperature ?: w.ambientTemperature.toDouble()).toFloat(),
+            riskLevel = r.level,
+            detectedCondition = "SOS received from watch [HR: ${packet.hr ?: w.heartRate} bpm, SpO2: ${packet.spo2 ?: w.spo2}%, Temp: ${packet.temperature ?: "--"}°C] at ${packet.timestamp ?: "Just now"}",
+            emergencyContactName = prof.emergencyContactName,
+            emergencyContactPhone = prof.emergencyContactPhone
+        )
+
+        alertManager.sendProactiveHealthAlert(
+            title = "🚨 EMERGENCY SOS FROM WATCH!",
+            message = "Physical SOS button was triggered on your SwasthyaSathi Watch. Emergency distress payload active.",
+            isEmergency = true
+        )
+
+        viewModelScope.launch {
+            sosManager.triggerEmergencySOS(event, _isOfflineMode.value)
+            _isSosOpen.value = true
         }
     }
 
@@ -367,6 +417,30 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
         _isDemoWearableOpen.value = open
     }
 
+    fun connectWatch() {
+        wearableManager.connectWatch()
+    }
+
+    fun disconnectWatch() {
+        wearableManager.disconnectWatch()
+    }
+
+    fun stopWatchScan() {
+        wearableManager.stopScan()
+    }
+
+    fun sendWatchCommand(command: String): Boolean {
+        return wearableManager.sendCommand(command)
+    }
+
+    fun setDemoWearableMode(active: Boolean) {
+        wearableManager.setDemoMode(active)
+    }
+
+    fun isBluetoothEnabled(): Boolean = wearableManager.isBluetoothEnabled()
+
+    fun hasRequiredBlePermissions(): Boolean = wearableManager.hasRequiredPermissions()
+
     fun updateWearableTelemetry(builder: (WearableTelemetry) -> WearableTelemetry) {
         wearableManager.updateTelemetry(builder)
     }
@@ -439,19 +513,30 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun recomputeRisk(profile: UserProfile, envData: EnvironmentalTelemetry, wearableData: WearableTelemetry) {
+        val effectiveTemp = if (wearableData.isRealWatchData && wearableData.ambientTemperature > 0f) {
+            wearableData.ambientTemperature.toDouble()
+        } else {
+            envData.temperatureC.toDouble()
+        }
+        val effectiveHumidity = if (wearableData.isRealWatchData && wearableData.humidity > 0) {
+            wearableData.humidity.toDouble()
+        } else {
+            envData.humidityPct.toDouble()
+        }
+
         val computed = RiskEngine.computeRisk(
-            temperatureC = envData.temperatureC.toDouble(),
+            temperatureC = effectiveTemp,
             feelsLikeC = envData.feelsLikeC.toDouble(),
-            humidityPct = envData.humidityPct.toDouble(),
+            humidityPct = effectiveHumidity,
             aqi = envData.aqi.toDouble(),
             profile = profile
         )
         _riskResult.value = computed
 
         val warnings = RiskEngine.computeDisasterWarnings(
-            temperatureC = envData.temperatureC.toDouble(),
+            temperatureC = effectiveTemp,
             feelsLikeC = envData.feelsLikeC.toDouble(),
-            humidityPct = envData.humidityPct.toDouble(),
+            humidityPct = effectiveHumidity,
             aqi = envData.aqi.toDouble(),
             weatherCode = envData.weatherCode,
             weatherDescription = envData.weatherDescription,

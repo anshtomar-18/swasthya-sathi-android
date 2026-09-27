@@ -24,6 +24,7 @@ import com.swasthyasathi.app.ui.components.EcgWaveform
 import com.swasthyasathi.app.ui.components.bounceClick
 import com.swasthyasathi.app.ui.theme.*
 import com.swasthyasathi.app.viewmodel.HealthViewModel
+import com.swasthyasathi.app.wearable.WearableConnectionStatus
 
 @Composable
 fun OverviewScreen(
@@ -36,6 +37,7 @@ fun OverviewScreen(
 ) {
     val profile by viewModel.userProfile.collectAsState()
     val telemetry by viewModel.telemetry.collectAsState()
+    val wearableTelemetry by viewModel.wearableTelemetry.collectAsState()
     val currentCity by viewModel.currentCity.collectAsState()
     val riskResult by viewModel.riskResult.collectAsState()
 
@@ -330,12 +332,22 @@ fun OverviewScreen(
                         Icon(Icons.Default.Favorite, contentDescription = null, tint = RiskLow)
                         Text("Biometric Rhythm", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = OnSurface)
                     }
-                    Surface(shape = RoundedCornerShape(100.dp), color = SurfaceContainer) {
-                        Text("BLE SYNCED", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = PrimaryTeal, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                    val isWatchConnected = wearableTelemetry.connectionStatus == WearableConnectionStatus.CONNECTED
+                    Surface(
+                        shape = RoundedCornerShape(100.dp),
+                        color = if (isWatchConnected) EmeraldContainer else SurfaceContainer
+                    ) {
+                        Text(
+                            text = if (isWatchConnected) "BLE CONNECTED" else "DISCONNECTED",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = if (isWatchConnected) EmeraldPrimary else OnSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
                     }
                 }
 
-                // Animated ECG Waveform
+                // Animated ECG Waveform (Visual Rhythm Representation)
+                val isConnected = wearableTelemetry.connectionStatus == WearableConnectionStatus.CONNECTED
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = SurfaceContainerLow,
@@ -346,7 +358,8 @@ fun OverviewScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(50.dp),
-                            lineColor = RiskLow
+                            lineColor = if (isConnected) EmeraldPrimary else RiskLow,
+                            bpm = if (isConnected && wearableTelemetry.heartRate > 0) wearableTelemetry.heartRate else 72
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
@@ -355,13 +368,29 @@ fun OverviewScreen(
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("Heart Rate", style = MaterialTheme.typography.labelSmall, color = OnSurfaceVariant)
-                                Text("78 bpm", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = OnSurface)
-                                Text("Normal", style = MaterialTheme.typography.labelSmall, color = RiskLow)
+                                Text(
+                                    text = if (isConnected && wearableTelemetry.heartRate > 0) "${wearableTelemetry.heartRate} bpm" else "--",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = OnSurface
+                                )
+                                Text(
+                                    text = if (isConnected) "Watch Live" else "Waiting",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isConnected) EmeraldPrimary else AppOutline
+                                )
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("SpO2", style = MaterialTheme.typography.labelSmall, color = OnSurfaceVariant)
-                                Text("98%", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = OnSurface)
-                                Text("Optimal", style = MaterialTheme.typography.labelSmall, color = RiskLow)
+                                Text("SpO2 (Est.)", style = MaterialTheme.typography.labelSmall, color = OnSurfaceVariant)
+                                Text(
+                                    text = if (isConnected && wearableTelemetry.spo2 > 0) "${wearableTelemetry.spo2}%" else "--",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = OnSurface
+                                )
+                                Text(
+                                    text = if (isConnected) "*Prototype" else "Waiting",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isConnected) RiskModerate else AppOutline
+                                )
                             }
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
