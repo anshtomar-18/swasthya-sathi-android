@@ -23,19 +23,39 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.swasthyasathi.app.data.model.RiskLevel
 import com.swasthyasathi.app.ui.theme.*
+import com.swasthyasathi.app.wearable.WearableConnectionStatus
+import com.swasthyasathi.app.wearable.WearableTelemetry
 
 @Composable
 fun VitalsCard(
     riskLevel: RiskLevel,
+    wearableTelemetry: WearableTelemetry? = null,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
 
-    val heartRate = when (riskLevel) {
-        RiskLevel.Critical -> 88
-        RiskLevel.High -> 82
-        RiskLevel.Moderate -> 74
-        RiskLevel.Low -> 68
+    val isConnected = wearableTelemetry?.connectionStatus == WearableConnectionStatus.CONNECTED
+    val isReal = wearableTelemetry?.isRealWatchData == true
+
+    val heartRate = if (wearableTelemetry != null && isConnected && wearableTelemetry.heartRate > 0) {
+        wearableTelemetry.heartRate
+    } else if (wearableTelemetry != null && !isConnected) {
+        null
+    } else {
+        when (riskLevel) {
+            RiskLevel.Critical -> 88
+            RiskLevel.High -> 82
+            RiskLevel.Moderate -> 74
+            RiskLevel.Low -> 68
+        }
+    }
+
+    val spo2Val = if (wearableTelemetry != null && isConnected && wearableTelemetry.spo2 > 0) {
+        wearableTelemetry.spo2
+    } else if (wearableTelemetry != null && !isConnected) {
+        null
+    } else {
+        98
     }
 
     val thermalStress = when (riskLevel) {
@@ -52,7 +72,7 @@ fun VitalsCard(
         targetValue = 1.22f,
         animationSpec = infiniteRepeatable(
             animation = keyframes {
-                durationMillis = (60_000 / heartRate.coerceAtLeast(60))
+                durationMillis = (60_000 / (heartRate ?: 72).coerceAtLeast(60))
                 1f at 0
                 1.22f at 120 using FastOutSlowInEasing
                 1.05f at 220 using LinearOutSlowInEasing
@@ -99,12 +119,12 @@ fun VitalsCard(
 
             Surface(
                 shape = RoundedCornerShape(100.dp),
-                color = PrimaryTealFixed.copy(alpha = 0.5f)
+                color = if (isConnected) EmeraldContainer else PrimaryTealFixed.copy(alpha = 0.5f)
             ) {
                 Text(
-                    text = "Band Pro X9: 60Hz BLE",
+                    text = if (isConnected) "SwasthyaSathi Watch: BLE Active" else "Watch Disconnected (--)",
                     style = MaterialTheme.typography.labelMedium,
-                    color = PrimaryTeal,
+                    color = if (isConnected) EmeraldPrimary else PrimaryTeal,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
             }
@@ -149,10 +169,15 @@ fun VitalsCard(
                         )
                     }
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("$heartRate", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold), color = OnSurface)
+                        Text(if (heartRate != null) "$heartRate" else "--", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold), color = OnSurface)
                         Text("BPM", style = MaterialTheme.typography.labelMedium, color = AppOutline, modifier = Modifier.padding(bottom = 3.dp))
                     }
-                    EcgWaveform(bpm = heartRate, lineColor = PrimaryTeal, glowColor = PrimaryTealFixed)
+                    EcgWaveform(bpm = heartRate ?: 70, lineColor = PrimaryTeal, glowColor = PrimaryTealFixed)
+                    Text(
+                        text = "Heart rhythm animation",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = AppOutline
+                    )
                 }
             }
 
@@ -223,16 +248,21 @@ fun VitalsCard(
                         Icon(Icons.Default.Opacity, contentDescription = null, tint = TertiaryNavy, modifier = Modifier.size(16.dp))
                     }
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("98", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold), color = OnSurface)
+                        Text(if (spo2Val != null) "$spo2Val" else "--", style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold), color = OnSurface)
                         Text("% SpO2", style = MaterialTheme.typography.labelMedium, color = AppOutline, modifier = Modifier.padding(bottom = 3.dp))
                     }
                     LinearProgressIndicator(
-                        progress = { 0.98f },
+                        progress = { if (spo2Val != null) (spo2Val / 100f).coerceIn(0f, 1f) else 0f },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp),
                         color = TertiaryNavy,
                         trackColor = SurfaceContainerLow
+                    )
+                    Text(
+                        text = "*Prototype sensor estimate",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = AppOutline
                     )
                 }
             }

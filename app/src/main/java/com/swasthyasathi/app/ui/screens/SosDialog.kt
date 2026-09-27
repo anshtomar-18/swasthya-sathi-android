@@ -40,6 +40,7 @@ fun SosDialog(
     val telemetry by viewModel.telemetry.collectAsState()
     val risk by viewModel.riskResult.collectAsState()
     val wearable by viewModel.wearableTelemetry.collectAsState()
+    val lastQueuedEvent by viewModel.lastQueuedEvent.collectAsState()
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -117,6 +118,22 @@ fun SosDialog(
                             lineHeight = 18.sp
                         )
 
+                        val isFromWatch = lastQueuedEvent?.detectedCondition?.contains("watch", ignoreCase = true) == true
+                        val hasWatchGps = wearable.gps && wearable.latitude != 0.0
+                        val gpsLocationText = if (hasWatchGps) {
+                            "Watch GPS (${String.format("%.4f", wearable.latitude)}° N, ${String.format("%.4f", wearable.longitude)}° E • ${wearable.satellites} Sats)"
+                        } else if (wearable.isRealWatchData) {
+                            "Location unavailable (Watch GPS searching)"
+                        } else {
+                            "${city.name} (${String.format("%.3f", city.lat)}° N, ${String.format("%.3f", city.lon)}° E)"
+                        }
+
+                        val vitalsText = if (wearable.heartRate > 0) {
+                            "${wearable.heartRate} BPM • SpO2 ${wearable.spo2}%* • ${if (wearable.ambientTemperature > 0f) String.format("%.1f", wearable.ambientTemperature) else "--"}°C • Humidity ${wearable.humidity}%"
+                        } else {
+                            "Vitals waiting for watch"
+                        }
+
                         // Telemetry & Vitals Payload Preview Box
                         Surface(
                             shape = RoundedCornerShape(14.dp),
@@ -129,8 +146,14 @@ fun SosDialog(
                                     .padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
-                                PreviewRow("GPS Location:", "${city.name} (${String.format("%.3f", city.lat)}° N, ${String.format("%.3f", city.lon)}° E)")
-                                PreviewRow("Wearable Vitals:", "${wearable.heartRate} BPM • SpO2 ${wearable.spo2}% • ${wearable.bodyTemperature}°C")
+                                if (isFromWatch) {
+                                    PreviewRow("SOS Trigger Source:", "Physical Button on SwasthyaSathi Watch", isBold = true, valueColor = SecondaryCoral)
+                                }
+                                PreviewRow("GPS Location:", gpsLocationText)
+                                PreviewRow("Watch Vitals:", vitalsText)
+                                if (wearable.batteryLevel > 0) {
+                                    PreviewRow("Watch Battery:", "${wearable.batteryLevel}%")
+                                }
                                 PreviewRow("Environmental Stress:", "${telemetry.temperatureC}°C Heat • AQI ${telemetry.aqi}")
                                 PreviewRow("Personal Risk Tier:", risk.level.uppercase(), isBold = true, valueColor = SecondaryCoral)
                                 HorizontalDivider(color = Color.Black.copy(alpha = 0.05f))
